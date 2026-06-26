@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(npm run *)",
+      "Bash(npm start *)",
+      "Bash(npm dev *)",
+      "Bash(pnpm run *)",
+      "Bash(pnpm dev *)",
+      "Bash(pnpm start *)",
+      "Bash(yarn run *)",
+      "Bash(yarn dev *)",
+      "Bash(yarn start *)",
+      "Bash(bun run dev *)",
+      "Bash(bun dev *)",
+      "Bash(cp .env.example .env)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -q 'cp \\.env\\.example \\.env' && echo '{\"systemMessage\": \"Blocked: `cp .env.example .env` would overwrite your actual .env with template defaults, destroying your custom settings (JWT_SECRET, INITIAL_PASSWORD, etc.). Use `cp -n .env.example .env` to create only if not exists, or edit .env directly.\"}'; echo '{\"continue\": true}'"
+          }
+        ]
+      }
+    ]
+  }
+}
