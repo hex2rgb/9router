@@ -4,6 +4,7 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import { Button } from "@/shared/components";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import TestAllAndCleanButton from "./TestAllAndCleanButton";
 function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias, onTest, testStatus, isTesting }) {
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
@@ -185,6 +186,15 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
         <Button size="sm" variant="secondary" icon="download" onClick={handleImport} disabled={!canImport || importing}>
           {importing ? "Importing..." : "Import from /models"}
         </Button>
+        {allModels.length > 0 && (
+          <TestAllAndCleanButton
+            allModels={allModels}
+            providerStorageAlias={providerStorageAlias}
+            onDeleteCustomModel={onDeleteCustomModel}
+            onDeleteAlias={onDeleteAlias}
+            onTestResult={(id, status) => setModelTestResults((prev) => ({ ...prev, [id]: status }))}
+          />
+        )}
       </div>
 
       {!canImport && (
