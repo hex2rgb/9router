@@ -279,6 +279,22 @@ export default function BatchModelSelectModal({
     (sum, id) => sum + filteredGroups[id].models.length, 0,
   );
 
+  // Custom models: split into vision / other subgroups
+  const customModelSubgroups = useMemo(() => {
+    const group = filteredGroups["__custom_models"];
+    if (!group || group.models.length === 0) return null;
+    const vision = [];
+    const other = [];
+    group.models.forEach((m) => {
+      if (getCaps(m.value)?.vision) vision.push(m);
+      else other.push(m);
+    });
+    const subs = [];
+    if (vision.length) subs.push({ key: "vision", label: "Vision", models: vision });
+    if (other.length) subs.push({ key: "other", label: "Other", models: other });
+    return subs.length > 0 ? subs : null;
+  }, [filteredGroups, getCaps]);
+
   // Select All for current view
   const allVisibleValues = useMemo(() => {
     const values = new Set();
@@ -315,6 +331,16 @@ export default function BatchModelSelectModal({
     const allSelected = group.models.every((m) => selectedModels.has(m.value));
     const next = new Set(selectedModels);
     group.models.forEach((m) => {
+      if (allSelected) next.delete(m.value);
+      else next.add(m.value);
+    });
+    setSelectedModels(next);
+  };
+
+  const handleToggleSubGroup = (subKey, models) => {
+    const allSelected = models.every((m) => selectedModels.has(m.value));
+    const next = new Set(selectedModels);
+    models.forEach((m) => {
       if (allSelected) next.delete(m.value);
       else next.add(m.value);
     });
@@ -435,29 +461,90 @@ export default function BatchModelSelectModal({
                 {/* Models */}
                 {!isCollapsed && (
                   <div className="px-2 py-1 space-y-0.5">
-                    {group.models.map((model) => {
-                      const isChecked = selectedModels.has(model.value);
-                      return (
-                        <label
-                          key={model.value}
-                          className="flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] group"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => handleToggleModel(model.value)}
-                            className="accent-primary size-3.5 cursor-pointer shrink-0"
-                          />
-                          <span className="text-xs font-mono text-text-main truncate min-w-0 flex-1">
-                            {model.name}
-                          </span>
-                          {model.isCustom && (
-                            <span className="text-[9px] text-text-muted opacity-60 shrink-0">custom</span>
-                          )}
-                          <CapacityBadges caps={getCaps(model.value)} />
-                        </label>
-                      );
-                    })}
+                    {providerId === "__custom_models" && customModelSubgroups
+                      ? customModelSubgroups.map((sub) => {
+                          const subKey = `__custom__${sub.key}`;
+                          const subCollapsed = collapsedGroups.has(subKey);
+                          const subSelectedCount = sub.models.filter((m) => selectedModels.has(m.value)).length;
+                          const subAllSelected = subSelectedCount === sub.models.length;
+                          return (
+                            <div key={subKey} className="rounded border border-border-subtle/50 overflow-hidden">
+                              {/* Subgroup header */}
+                              <div className="flex items-center gap-1.5 px-2 py-1 bg-black/[0.01] dark:bg-white/[0.01]">
+                                <button
+                                  onClick={() => toggleCollapse(subKey)}
+                                  className="p-0.5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
+                                >
+                                  <span className="material-symbols-outlined text-[14px]">
+                                    {subCollapsed ? "chevron_right" : "expand_more"}
+                                  </span>
+                                </button>
+                                <input
+                                  type="checkbox"
+                                  checked={subAllSelected}
+                                  onChange={() => handleToggleSubGroup(subKey, sub.models)}
+                                  className="accent-primary size-3.5 cursor-pointer shrink-0"
+                                />
+                                <span className="text-xs font-medium text-text-main truncate flex-1 min-w-0">
+                                  {sub.label}
+                                </span>
+                                <span className="text-[10px] text-text-muted shrink-0">
+                                  {subAllSelected ? `☑ ${subSelectedCount}/${sub.models.length}` : `☐ ${subSelectedCount}/${sub.models.length}`}
+                                </span>
+                              </div>
+                              {!subCollapsed && (
+                                <div className="pl-3 pr-2 py-1 space-y-0.5">
+                                  {sub.models.map((model) => {
+                                    const isChecked = selectedModels.has(model.value);
+                                    return (
+                                      <label
+                                        key={model.value}
+                                        className="flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] group"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => handleToggleModel(model.value)}
+                                          className="accent-primary size-3.5 cursor-pointer shrink-0"
+                                        />
+                                        <span className="text-xs font-mono text-text-main truncate min-w-0 flex-1">
+                                          {model.name}
+                                        </span>
+                                        {model.isCustom && (
+                                          <span className="text-[9px] text-text-muted opacity-60 shrink-0">custom</span>
+                                        )}
+                                        <CapacityBadges caps={getCaps(model.value)} />
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      : group.models.map((model) => {
+                          const isChecked = selectedModels.has(model.value);
+                          return (
+                            <label
+                              key={model.value}
+                              className="flex items-center gap-2 px-1 py-0.5 rounded cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] group"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleModel(model.value)}
+                                className="accent-primary size-3.5 cursor-pointer shrink-0"
+                              />
+                              <span className="text-xs font-mono text-text-main truncate min-w-0 flex-1">
+                                {model.name}
+                              </span>
+                              {model.isCustom && (
+                                <span className="text-[9px] text-text-muted opacity-60 shrink-0">custom</span>
+                              )}
+                              <CapacityBadges caps={getCaps(model.value)} />
+                            </label>
+                          );
+                        })}
                   </div>
                 )}
               </div>
