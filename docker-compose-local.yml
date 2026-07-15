@@ -1,0 +1,32 @@
+services:
+  9router:
+    build: .
+    image: 9router:local
+    container_name: 9router
+    ports:
+      - "20128:20128"
+    volumes:
+      - /mnt/user/appdata/9router:/app/data
+    environment:
+      # 官方强制必要参数
+      - DATA_DIR=/app/data
+      - TZ=Asia/Shanghai
+      # 隐私1：关闭Next框架匿名遥测上报
+      - NEXT_TELEMETRY_DISABLED=1
+      # 隐私2：关闭本地请求观测日志（彻底不留调用记录，按需开启true）
+      - OBSERVABILITY_ENABLED="true"
+      # 安全优化（可选，自用推荐）
+      - INITIAL_PASSWORD=9router
+      - JWT_SECRET=c801d80d43e2b2b3d5a0e08de0c9b1da9efddfa901ef97d9f37f4bcd4222eaf8
+    restart: unless-stopped
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    networks:
+      my-service-net:
+        ipv4_address: 172.18.0.59
+
+networks:
+  my-service-net:
+    external: true
