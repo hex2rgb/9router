@@ -2,128 +2,90 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## What this is
 
-9Router is a **local AI routing gateway and dashboard** — a Next.js app that provides an OpenAI-compatible API endpoint (`/v1/*`) and routes traffic across 40+ AI providers with format translation, fallback chains, token refresh, and usage tracking.
+9Router (`9router-app`) — a local AI routing gateway + Next.js dashboard. It exposes one OpenAI-compatible endpoint (`/v1/*`) and routes traffic across 40+ upstream providers with format translation, model-combo fallback, multi-account fallback, OAuth/API-key credential management, token refresh, quota/usage tracking, and optional cloud sync.
+
+Two published artifacts live in this one repo:
+- The **dashboard + gateway** (root `package.json`, `9router-app`) — the Next.js server that does the actual routing.
+- The **CLI launcher** (`cli/`, published to npm as `9router`) — a separate package that installs/starts the server and manages the tray. It has its own `package.json`, version, and build.
+
+The code lives in `src/` (Next.js app + dashboard/compat APIs), `open-sse/` (the provider-agnostic routing/translation engine), `cli/` (the launcher package), and `tests/`.
 
 ## Commands
 
-### Development (web dashboard)
+Dashboard/gateway (run from repo root):
 ```bash
-npm run dev              # Next.js dev server on port 20127
-npm run build            # Production build (standalone output)
-npm start                # Start production server
+cp .env.example .env
+npm install
+PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev   # dev (webpack, port 20127 by default via next dev)
+npm run build && PORT=20128 HOSTNAME=0.0.0.0 npm run start           # production
+```
+- Bun variants: `npm run dev:bun` / `build:bun` / `start:bun`.
+- Default runtime port is **20128** (dashboard at `/dashboard`, API at `/v1`).
+- Lint: `npx eslint .` (config `eslint.config.mjs`, extends `eslint-config-next`).
+
+CLI package (`cli/`):
+```bash
+npm run cli:pack       # build + npm pack from root
+cd cli && npm run dev  # nodemon watch
 ```
 
-### CLI package (published to npm as `9router`)
+Tests (vitest, in `tests/`, an **independent** ESM package — not wired into root `npm test`):
 ```bash
-cd cli
-npm run dev              # Dev with nodemon
-npm run build            # Bundle with esbuild
-npm run pack:cli         # Build + npm pack (produces .tgz in repo root)
-npm run publish:cli      # Build + npm publish
+npm install                             # ROOT deps first — tests import from src/ which needs `open`, `undici`, etc.
+cd tests && npm install                 # then tests' own deps (vitest) → tests/node_modules (allowed by tests/.gitignore)
+npx vitest run                          # all tests; auto-discovers tests/vitest.config.js
+npx vitest run unit/capabilities.test.js   # single file (path relative to tests/)
 ```
+> The committed `tests/package.json` `test` script hardcodes Unix paths (`NODE_PATH=/tmp/node_modules …`) — a shared-install workaround from upstream. On Windows (or anywhere), ignore it and use the `npx vitest` form above; `vitest.config.js` resolves the `open-sse`/`@/` aliases from the repo root regardless of where vitest lives.
+>
+> **The suite is NOT expected to be all-green on a plain checkout.** ~938 pass, ~64 fail. Judge regressions with `tests/__baseline__/verify-no-regression.mjs`, not a raw run. Expected red:
+> - 26 catalogued in `tests/__baseline__/known-fails.txt` (rtk, oauth-cursor-auto-import, translator-request-normalization, …).
+> - `unit/embeddings.cloud.test.js` imports `cloud/src/handlers/embeddings.js` — the `cloud/` worker dir is **not in this repo**, so it always fails here.
+> - `unit/xai-oauth-service.test.js` times out (5s) when the xAI endpoint-discovery fetch isn't reachable/mocked.
+> - `real/*.real.test.js` make live provider calls — need credentials, skip otherwise.
+- `*.real.test.js` under `tests/translator/real/` make live provider calls — skip unless credentials are set.
+- Regression baselines: `tests/__baseline__/verify-*.mjs` compare against committed snapshots (providers, aliases, OAuth URLs). Run these after touching provider registry / alias logic.
 
-### Tests
-```bash
-cd tests
-npm test                 # Run all Vitest tests (NODE_PATH auto-set)
-npm run test:watch       # Watch mode
-```
+## Architecture
 
-### Docker
-```bash
-docker build -t 9router .                          # Multi-stage build
-docker compose up                                   # docker-compose.yml
-bash start.sh                                       # Build + run container from source
-```
+Two authoritative docs already exist — read them before working in these areas rather than re-deriving:
+- `docs/ARCHITECTURE.md` — full system: request lifecycle, combo/account fallback, OAuth + token refresh, cloud sync, data model.
+- `open-sse/AGENTS.md` — the routing/translation engine's own conventions and "how to add a provider/executor/translator". **Read this before editing anything under `open-sse/`.**
 
-### Scripts (miscellaneous)
-```bash
-node scripts/translate-readme.js                   # Sync translated READMEs
-node scripts/migrate-registry.mjs                  # Migrate provider registry
-node scripts/test-combo-autoswitch.mjs             # Test combo auto-switch logic
-node scripts/injectDisplayToRegistry.mjs           # Inject display names to registry
-```
+### Request flow (the thing to understand first)
+`src/app/api/v1/*` route (Next rewrite maps `/v1/*` → `/api/v1/*` in `next.config.mjs`)
+→ `src/sse/handlers/chat.js` (parse, combo expansion, account-selection loop)
+→ `open-sse/handlers/chatCore.js` (detect source format, translate request, dispatch to executor, retry/refresh, stream setup)
+→ `open-sse/executors/*` (per-provider upstream call; `default.js` handles any OpenAI-compatible provider)
+→ `open-sse/translator/*` (client format ↔ provider format)
+→ SSE back to client.
 
-## Path Aliases (jsconfig.json)
-- `@/*` → `./src/*`
-- `open-sse/*` → `./open-sse/*`
+`src/sse/` is the app-side entry glue; `open-sse/` is the provider-agnostic engine (also usable standalone). Cross that boundary consciously.
 
-## Architecture (Two-Layer Structure)
+### Translator engine (`open-sse/translator/`)
+- Pivots through **OpenAI as the intermediate format**. A translator registered on an exact `source:target` pair (e.g. `claude:kiro`) runs as a **direct route**, skipping the lossy double-hop. Prefer a direct route for fragile pairs (thinking blocks, tool ids, non-base64 images, `is_error`).
+- Translators **self-register** via `register(from, to, reqFn, resFn)` as an import side effect — a new translator file MUST be imported in `open-sse/translator/index.js` or it never runs.
+- Never hardcode role/block/model strings — use `open-sse/translator/schema/` and `open-sse/config/` constants. Config-driven and DRY is enforced by convention here.
 
-### Layer 1: Next.js App Routes (`src/app/`)
-- **`src/app/api/v1/*`** — OpenAI-compatible API endpoints (chat, messages, models, embeddings, images, audio, responses, search, web/fetch). These are exposed at `/v1/*` via Next.js rewrites.
-- **`src/app/api/*`** — Management/configuration APIs (providers, oauth, keys, combos, pricing, usage, settings, sync, cli-tools, tunnel, mcp, health, version, proxy-pools, headroom, tags, translator, locale, init, shutdown).
-- **`src/app/(dashboard)/dashboard/*`** — Dashboard UI pages (providers, endpoint, usage, token-saver, translator, combos, cli-tools, proxy-pools, media-providers, mitm, quota, skills, basic-chat, console-log, profile).
-- **`src/proxy.js`** — Dashboard middleware guard (matcher applies to all routes except static assets).
+### Provider registry (`open-sse/providers/registry/*`)
+- One file per provider. `providers/registry/index.js` is an **auto-generated** static import list — regenerate it with `scripts/migrate-registry.mjs` / `injectDisplayToRegistry.mjs`, don't hand-edit.
+- Add a provider: copy `providers/REGISTRY_TEMPLATE.js`, add models to `config/providerModels.js`. Only add an executor for non-OpenAI-compatible upstreams.
 
-### Layer 2: SSE + Translation Core (`open-sse/`)
-- **`open-sse/handlers/chatCore.js`** — Core chat orchestration: translation, executor dispatch, retry/refresh, stream setup.
-- **`open-sse/executors/*`** — Provider-specific executors (default, antigravity, gemini-cli, github, kiro, codex, cursor, vertex, qwen, ollama-local, iflow, azure, etc.).
-- **`open-sse/translator/`** — Format translation (request/response) between OpenAI, Claude, Gemini, and other formats.
-- **`open-sse/providers/`** — Provider registry, model lists, pricing, capabilities.
-- **`open-sse/rtk/`** — RTK Token Saver (compresses tool_result tokens to save 20-40%).
-- **`open-sse/services/accountFallback.js`** — Account-level fallback logic on errors/rate-limits.
-- **`open-sse/services/tokenRefresh/`** — Token refresh for OAuth providers.
-- **`open-sse/services/usage/`** — Usage extraction and normalization from upstream responses.
+### Persistence — IMPORTANT (ARCHITECTURE.md is stale here)
+State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with an adapter fallback chain (`driver.js`): `bun:sqlite` → `better-sqlite3` (optional native dep) → `node:sqlite` (Node ≥22.5) → `sql.js` (pure-JS fallback, always works). `better-sqlite3` is deliberately in `optionalDependencies` so install never fails without build tools.
+- `src/lib/localDb.js` is a **backward-compat shim** re-exporting `src/lib/db/index.js`. New code should import from `@/lib/db/index.js`; per-entity logic lives in `src/lib/db/repos/*`. Schema/migrations in `src/lib/db/migrations/`.
+- DB file location resolves via `src/lib/db/paths.js` (`DATA_DIR`, else `~/.9router/`).
+- Usage/logs (`src/lib/usageDb.js`, `usage.json` + `log.txt`) still live under `~/.9router` and do **not** follow `DATA_DIR`.
 
-### Entry Points (src/sse/)
-- **`src/sse/handlers/chat.js`** — Request parse, combo handling, account selection loop. Invokes `open-sse/handlers/chatCore.js`.
-- **`src/sse/handlers/embeddings.js`**, **`imageGeneration.js`**, **`search.js`**, **`stt.js`**, **`tts.js`**, **`fetch.js`** — Other request type handlers.
+### RTK token saver (`open-sse/rtk/`)
+Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
 
-### Request Flow (`POST /v1/chat/completions`)
-1. Next.js rewrites `/v1/*` → `/api/v1/*`
-2. `src/app/api/v1/chat/completions/route.js` → `src/sse/handlers/chat.js`
-3. Model/combo resolution, credential selection, format detection
-4. `open-sse/handlers/chatCore.js` — translate request → execute → handle retry/refresh → translate response → stream to client
-5. Usage recorded to `src/lib/usageDb.js`
+## Conventions & gotchas
 
-## Database Layer (`src/lib/db/`)
-
-SQLite with multiple adapter backends:
-- **`adapters/betterSqliteAdapter.js`** — best performance (optional, native)
-- **`adapters/nodeSqliteAdapter.js`** — Node 22+ built-in
-- **`adapters/bunSqliteAdapter.js`** — Bun native
-- **`adapters/sqljsAdapter.js`** — fallback (pure JS, no native deps)
-
-Repository pattern in `repos/` — one per entity (connections, nodes, aliases, combos, apiKeys, settings, pricing, proxyPools, usage, disabledModels, requestDetails).
-
-Database file: `${DATA_DIR}/db/data.sqlite` (default `~/.9router/db/data.sqlite`).
-
-## CLI Package (`cli/`)
-
-Published as `9router` on npm. Entry: `cli/cli.js`. Bundled with esbuild. Features:
-- Starts the Next.js standalone server (`./.next/standalone/server.js`)
-- System tray icon (macOS/Linux via systray2, Windows via PowerShell)
-- Certificate generation for MITM proxy
-- Auto-update checks
-- Post-install hook sets up runtime dependencies under `~/.9router/runtime/`
-
-## Key Design Patterns
-
-- **Format detection + translation**: Source format is auto-detected from request shape (openai, claude, gemini, openai-responses). Translators convert request/response between formats transparently.
-- **Fallback chain**: Combo models → account round-robin → next combo model → error. `accountFallback.js` drives cooldowns on per-account errors.
-- **Stream safety**: Disconnect-aware stream controller, end-of-stream flush with `[DONE]` handling, usage estimation when provider metadata is missing.
-- **SSRF protection**: `src/shared/utils/ssrfGuard.js` validates outbound URLs.
-
-## Environment Variables
-
-See `.env.example` for full reference. Key variables:
-- `JWT_SECRET`, `INITIAL_PASSWORD` — auth
-- `DATA_DIR` — storage path (default `~/.9router`)
-- `PORT` (default 20128), `HOSTNAME` (default 0.0.0.0)
-- `BASE_URL`, `NEXT_PUBLIC_BASE_URL` — instance URL
-- `CLOUD_URL`, `NEXT_PUBLIC_CLOUD_URL` — sync cloud URL
-- `API_KEY_SECRET`, `MACHINE_ID_SALT` — security
-- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` — outbound proxy
-- `ENABLE_REQUEST_LOGS` — debug logging toggle
-- `NEXT_TRACING_ROOT_MODE=workspace` — for CLI bundling
-
-## Important Notes
-
-- `NODE_PATH=/tmp/node_modules` is required for running Vitest (npm workspace hoisting from the root Next.js project).
-- `usageDb.js` stores under `~/.9router` and does **not** follow `DATA_DIR` — this is a known architectural debt.
-- `better-sqlite3` is in `optionalDependencies` — if native build fails, `sql.js` is used as fallback.
-- The dashboard login defaults to password `123456` — override via `INITIAL_PASSWORD` in production.
-- Provider secrets (API keys, OAuth tokens) are persisted in `providerConnections` in SQLite — protect at filesystem level.
+- Plain JavaScript (ESM), no TypeScript. `@/*` path alias → `src/*` (`jsconfig.json`).
+- `custom-server.js` wraps the Next standalone server to derive client IP from the TCP socket and strip attacker-controlled `X-Forwarded-For` — trusting forwarding headers only from a loopback reverse proxy. Preserve this when touching request/IP/rate-limit code.
+- Security-sensitive env: `JWT_SECRET` (session cookie), `INITIAL_PASSWORD` (default `123456` — must override), `API_KEY_SECRET`, `MACHINE_ID_SALT`. Full env contract in `.env.example` and ARCHITECTURE.md's env matrix.
+- Binary/protobuf upstreams (kiro EventStream, cursor protobuf, commandcode NDJSON) don't round-trip through OpenAI — they're handled inside their own executor, not the translator.
+- Versioning: root and `cli/` are versioned independently; changes are logged in `CHANGELOG.md`. Commit style is Conventional Commits (`fix(translator): …`, `feat(...)`).
