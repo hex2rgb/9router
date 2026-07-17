@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { Card, Button, Input } from "@/shared/components";
 
 export default function LoginPage() {
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState("9router");
   const [error, setError] = useState("");
   const [resetHint, setResetHint] = useState("");
   const [retryAfter, setRetryAfter] = useState(0);
