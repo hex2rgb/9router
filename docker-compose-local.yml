@@ -20,8 +20,7 @@ services:
         condition: on-failure
         max_attempts: 3
     networks:
-      my-service-net:
-        ipv4_address: 172.18.0.59
+      - my-service-net
 
 networks:
   my-service-net:
