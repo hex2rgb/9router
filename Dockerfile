@@ -9,7 +9,7 @@ RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY package.json ./
 RUN --mount=type=cache,target=/root/.npm \
-  pnpm install
+  npm install --registry=https://mirrors.tuna.tsinghua.edu.cn/npm/registry
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
