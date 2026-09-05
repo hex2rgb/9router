@@ -15,10 +15,12 @@ services:
       INITIAL_PASSWORD: 9router
       JWT_SECRET: c801d80d43e2b2b3d5a0e08de0c9b1da9efddfa901ef97d9f37f4bcd4222eaf8
     restart: unless-stopped
-    deploy:
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
+#    deploy:
+#      restart_policy:
+#        condition: on-failure
+#        max_attempts: 3
+    networks:
+      - my-service-net
 
 networks:
   my-service-net:
