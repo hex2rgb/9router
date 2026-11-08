@@ -354,3 +354,30 @@ describe("transport-declared thinkingFormat (Responses endpoints)", () => {
     expect(out.reasoning_effort).toBe("high");
   });
 });
+
+// opencode-go's /messages is a strict Anthropic Messages endpoint that rejects the Chat-shaped
+// thinking fields emitted for its deepseek models (400 "reasoning_effort: requires a native
+// Anthropic Messages target"). The same endpoint serves claude-haiku-5-5, which needs adaptive,
+// so the downgrade is per model capability and scoped to this provider's Claude wire.
+describe("opencode-go Claude wire uses Anthropic thinking shapes", () => {
+  const claudeBody = (extra) => ({ messages: [{ role: "user", content: "hi" }], ...extra });
+
+  it("deepseek models get the budget shape, never reasoning_effort", () => {
+    const out = apply("claude", "deepseek-v4.1-flash", claudeBody({ thinking: { type: "enabled", budget_tokens: 8000 } }), "opencode-go");
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 8000 });
+    expect(out.reasoning_effort).toBeUndefined();
+    expect(out.enable_thinking).toBeUndefined();
+  });
+
+  it("claude-haiku-5-5 keeps its adaptive shape", () => {
+    const out = apply("claude", "claude-haiku-5-5", claudeBody({ thinking: { type: "enabled", budget_tokens: 8000 } }), "opencode-go");
+    expect(out.thinking?.type).toBe("adaptive");
+    expect(out.output_config?.effort).toBeTruthy();
+  });
+
+  it("the Chat wire of the same provider is unchanged", () => {
+    const out = apply("openai", "deepseek-v4.1-flash", claudeBody({ reasoning_effort: "high" }), "opencode-go");
+    expect(out.thinking).toEqual({ type: "enabled" });
+    expect(out.reasoning_effort).toBe("high");
+  });
+});

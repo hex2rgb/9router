@@ -127,6 +127,24 @@ function openAIThinkingDisplay(body) {
 
 const NATIVE_ONLY_FORMATS = new Set(["gemini-level", "gemini-budget", "claude-budget", "claude-adaptive", "kiro"]);
 
+// Formats whose applyFormat branch writes only fields the Anthropic Messages API
+// defines (thinking / output_config, or nothing at all). A Claude-wire body must
+// never carry the Chat-shaped reasoning_effort / enable_thinking / thinking_budget
+// / reasoning.
+const CLAUDE_WIRE_SAFE_FORMATS = new Set([
+  "claude-budget", "claude-adaptive", "minimax", "hunyuan", "kiro",
+]);
+
+// Providers whose model capabilities describe the Chat wire but which are pushed
+// onto a strict Anthropic Messages endpoint. opencode-go's /zen/go/v1/messages
+// answers 400 "reasoning_effort: requires a native Anthropic Messages target" to
+// the Chat-shaped thinking fields emitted for deepseek models. A transports[]
+// thinkingFormat declaration cannot express this: the same endpoint serves
+// claude-haiku-5-5 (needs thinking.type=adaptive, see capabilities.js) and
+// deepseek (needs the budget shape), and one transport-level string cannot cover
+// both. Keep the Claude-native shapes and downgrade everything else to budget.
+const CLAUDE_WIRE_BUDGET_ONLY_PROVIDERS = new Set(["opencode-go"]);
+
 function resolveFormat(targetFormat, model, provider) {
   if (targetFormat === "commandcode") return "commandcode";
   // A multi-endpoint provider can declare, per transports[] entry, the thinking shape that
@@ -142,6 +160,13 @@ function resolveFormat(targetFormat, model, provider) {
   const caps = getCapabilitiesForModel(provider, model);
   const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
   if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
+    if (
+      targetFormat === "claude" &&
+      CLAUDE_WIRE_BUDGET_ONLY_PROVIDERS.has(provider) &&
+      !CLAUDE_WIRE_SAFE_FORMATS.has(caps.thinkingFormat)
+    ) {
+      return FORMAT_TO_NATIVE.claude;
+    }
     return caps.thinkingFormat;
   }
   return FORMAT_TO_NATIVE[targetFormat] || "openai";
